@@ -503,9 +503,34 @@ textarea.fc { resize:vertical; }
         <label>備考（任意）</label>
         <textarea class="fc" id="f-notes" rows="2" placeholder="メモや追加情報"></textarea>
       </div>
+      <!-- Recurring reservation section (new only) -->
+      <div class="fg" id="recur-section">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="f-recur" onchange="toggleRecur()" style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)">
+          繰り返し予約
+        </label>
+        <div id="recur-opts" style="display:none;margin-top:10px;padding:10px;background:#f3f2f1;border-radius:6px">
+          <div class="frow" style="gap:10px">
+            <div class="fg" style="flex:1">
+              <label>パターン</label>
+              <select class="fc" id="f-recur-type" onchange="updateRecurPreview()">
+                <option value="daily">毎日</option>
+                <option value="weekly" selected>毎週</option>
+                <option value="monthly">毎月</option>
+              </select>
+            </div>
+            <div class="fg" style="flex:1">
+              <label>繰り返し終了日</label>
+              <input class="fc" id="f-recur-end" type="date" onchange="updateRecurPreview()">
+            </div>
+          </div>
+          <div id="recur-preview" style="font-size:12px;color:#605e5c;margin-top:6px;"></div>
+        </div>
+      </div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-danger hidden" id="del-btn" onclick="deleteResv()">🗑 削除</button>
+      <button class="btn btn-danger hidden" id="del-btn" onclick="deleteResv()">🗑 この予約を削除</button>
+      <button class="btn btn-danger hidden" id="del-all-btn" onclick="deleteAllRecur()" style="background:#8764b8;border-color:#8764b8">🗑 シリーズをすべて削除</button>
       <span class="ml-auto"></span>
       <button class="btn btn-outline" onclick="closeResv()">キャンセル</button>
       <button class="btn btn-primary" onclick="saveResv()">💾 保存</button>
@@ -1217,9 +1242,15 @@ function openNew(rid, startSlot, endSlot) {
   const res = S.resources.find(r => r.id === rid);
   document.getElementById('resv-title').textContent = '新規予約';
   document.getElementById('del-btn').classList.add('hidden');
+  document.getElementById('del-all-btn').classList.add('hidden');
   document.getElementById('f-title').value = '';
   document.getElementById('f-person').value = '';
   document.getElementById('f-notes').value = '';
+  // Reset recurring
+  document.getElementById('f-recur').checked = false;
+  document.getElementById('recur-opts').style.display = 'none';
+  document.getElementById('recur-preview').textContent = '';
+  document.getElementById('recur-section').style.display = '';
   document.getElementById('resv-info').innerHTML = infoCardHtml(res, S.currentDate);
   populateTimes(startSlot, endSlot);
   renderSwatches();
@@ -1240,7 +1271,18 @@ function openEdit(id, e) {
   document.getElementById('f-title').value  = rv.title;
   document.getElementById('f-person').value = rv.person;
   document.getElementById('f-notes').value  = rv.notes || '';
-  document.getElementById('resv-info').innerHTML = infoCardHtml(res, rv.date);
+  // Recurring: hide recur input section; show series info + del-all if applicable
+  document.getElementById('recur-section').style.display = 'none';
+  let infoHtml = infoCardHtml(res, rv.date);
+  if (rv.recurId) {
+    const lbl = { daily:'毎日', weekly:'毎週', monthly:'毎月' }[rv.recurType] || '';
+    const cnt = S.reservations.filter(r => r.recurId === rv.recurId).length;
+    infoHtml += `<div style="margin-top:6px;padding:5px 10px;background:#ede0ff;border-radius:6px;font-size:12px;color:#5c2d91">🔄 繰り返し予約（${lbl}）の一部 — シリーズ合計 ${cnt}件</div>`;
+    document.getElementById('del-all-btn').classList.remove('hidden');
+  } else {
+    document.getElementById('del-all-btn').classList.add('hidden');
+  }
+  document.getElementById('resv-info').innerHTML = infoHtml;
   populateTimes(rv.startSlot, rv.endSlot);
   document.getElementById('f-start').value = rv.startSlot;
   document.getElementById('f-end').value   = rv.endSlot;
@@ -1282,6 +1324,41 @@ function onTimeChg() {
   }
 }
 
+// ===== RECURRING HELPERS =====
+function toggleRecur() {
+  const checked = document.getElementById('f-recur').checked;
+  document.getElementById('recur-opts').style.display = checked ? 'block' : 'none';
+  if (checked) {
+    const d = new Date((editDate || S.currentDate) + 'T00:00:00');
+    d.setDate(d.getDate() + 28);
+    document.getElementById('f-recur-end').value = d.toISOString().split('T')[0];
+    updateRecurPreview();
+  }
+}
+function updateRecurPreview() {
+  const type    = document.getElementById('f-recur-type').value;
+  const endDate = document.getElementById('f-recur-end').value;
+  const start   = editDate || S.currentDate;
+  const labels  = { daily:'毎日', weekly:'毎週', monthly:'毎月' };
+  const el = document.getElementById('recur-preview');
+  if (!endDate || endDate < start) { el.textContent = '終了日を設定してください'; return; }
+  const n = generateRecurDates(start, type, endDate).length;
+  el.textContent = `→ ${labels[type]} × ${n}件の予約が作成されます`;
+}
+function generateRecurDates(startDate, type, endDate) {
+  const dates = [];
+  const cur = new Date(startDate + 'T00:00:00');
+  const end = new Date(endDate   + 'T00:00:00');
+  while (cur <= end && dates.length < 100) {
+    dates.push(cur.toISOString().split('T')[0]);
+    if      (type === 'daily')   cur.setDate(cur.getDate() + 1);
+    else if (type === 'weekly')  cur.setDate(cur.getDate() + 7);
+    else if (type === 'monthly') cur.setMonth(cur.getMonth() + 1);
+    else break;
+  }
+  return dates;
+}
+
 function saveResv() {
   const title  = document.getElementById('f-title').value.trim();
   const person = document.getElementById('f-person').value.trim();
@@ -1299,8 +1376,23 @@ function saveResv() {
     if (idx >= 0) S.reservations[idx] = { ...S.reservations[idx], title, person, startSlot:start, endSlot:end, notes, color:pickedColor };
     toast('予約を更新しました', 'ok');
   } else {
-    S.reservations.push({ id:uid(), resourceId:editResId, date, title, person, startSlot:start, endSlot:end, notes, color:pickedColor });
-    toast('予約を登録しました', 'ok');
+    const isRecur = document.getElementById('f-recur').checked;
+    if (isRecur) {
+      const type    = document.getElementById('f-recur-type').value;
+      const endDate = document.getElementById('f-recur-end').value;
+      if (!endDate)        { toast('繰り返し終了日を設定してください', 'err'); return; }
+      if (endDate < date)  { toast('終了日は開始日以降にしてください', 'err'); return; }
+      const dates = generateRecurDates(date, type, endDate);
+      if (dates.length === 0) { toast('有効な繰り返し日がありません', 'err'); return; }
+      const rId = uid();
+      dates.forEach(d => {
+        S.reservations.push({ id:uid(), resourceId:editResId, date:d, title, person, startSlot:start, endSlot:end, notes, color:pickedColor, recurId:rId, recurType:type });
+      });
+      toast(`繰り返し予約 ${dates.length}件を登録しました`, 'ok');
+    } else {
+      S.reservations.push({ id:uid(), resourceId:editResId, date, title, person, startSlot:start, endSlot:end, notes, color:pickedColor });
+      toast('予約を登録しました', 'ok');
+    }
   }
   closeResv();
   render();
@@ -1311,6 +1403,17 @@ function deleteResv() {
   if (!confirm('この予約を削除しますか？')) return;
   S.reservations = S.reservations.filter(r => r.id !== editId);
   toast('予約を削除しました');
+  closeResv();
+  render();
+}
+function deleteAllRecur() {
+  if (!editId) return;
+  const rv = S.reservations.find(r => r.id === editId);
+  if (!rv || !rv.recurId) return;
+  const count = S.reservations.filter(r => r.recurId === rv.recurId).length;
+  if (!confirm(`繰り返し予約シリーズ（${count}件）をすべて削除しますか？`)) return;
+  S.reservations = S.reservations.filter(r => r.recurId !== rv.recurId);
+  toast(`繰り返し予約 ${count}件を削除しました`);
   closeResv();
   render();
 }
